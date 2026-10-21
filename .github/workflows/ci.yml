@@ -143,11 +143,20 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Récupérer les runs (branche et baseline)
+      # Téléchargement PAR NOM vers un chemin explicite : avec « pattern », un seul artefact
+      # trouvé (push sur main : pas de baseline) serait extrait dans runs/ et non runs/run-pr/.
+      - name: Récupérer le run de la branche
         uses: actions/download-artifact@v8
         with:
-          pattern: run-*
-          path: runs
+          name: run-pr
+          path: runs/run-pr
+      - name: Récupérer le run de la baseline (absent hors pull request)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true # premier run : la baseline peut manquer
+        uses: actions/download-artifact@v8
+        with:
+          name: run-baseline
+          path: runs/run-baseline
       - name: Récupérer la matrice
         uses: actions/download-artifact@v8
         with:
