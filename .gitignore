@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Données : jamais dans Git, sauf le README du dossier
+# (un dossier ignoré « data/ » interdirait de ré-inclure data/README.txt)
+/data/*
+!/data/README.txt
+# TP4 (provisoire) : le jeu de données (675 Ko) est versionné pour que la CI puisse
+# entraîner ; il sera retiré de Git et suivi par DVC au TP5 (git rm --cached + dvc add).
+!/data/churn.csv
+
+# Artefacts produits par l'entraînement
+/artifacts/*
+!/artifacts/.gitkeep
+report.md
+
+# Divers
+.env
+.DS_Store
+Thumbs.db

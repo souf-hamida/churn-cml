@@ -1,0 +1,35 @@
+# Facultatif (TP3) : entraînement puis API, en une commande.
+#   docker compose up --build        (puis Ctrl+C ; nettoyage : docker compose down)
+# Pas de champ « version: » (obsolète avec Docker Compose v2).
+name: mlt-churn
+
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mlt-churn-train:0.1.0
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+        read_only: true
+      - type: bind
+        source: ./artifacts
+        target: /app/artifacts
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: mlt-churn-api:0.1.0
+    depends_on:
+      train:
+        condition: service_completed_successfully
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ./artifacts
+        target: /app/artifacts
+        read_only: true

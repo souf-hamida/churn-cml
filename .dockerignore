@@ -1,0 +1,17 @@
+# Contexte de build minimal : ni données, ni artefacts, ni environnement local
+.git/
+.github/
+.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+data/
+artifacts/
+notebooks/
+tests/
+.env
+compose.yaml
+Dockerfile*

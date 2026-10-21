@@ -1,0 +1,4 @@
+# Notebooks : sorties retirées par le filtre nbstripout (chacun installe le filtre :
+#   pip install nbstripout && nbstripout --install --attributes .gitattributes)
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb

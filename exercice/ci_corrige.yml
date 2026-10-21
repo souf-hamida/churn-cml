@@ -1,0 +1,79 @@
+# Corrigé de l'exercice (TP4, partie 5) : exercice/ci_casse.yml, 8 erreurs corrigées.
+# Chaque correction est repérée par « (n) ». Validé par actionlint 1.7.12 : code retour 0.
+name: ci-churn-corrige
+
+# (1) on: [push] -> le rapport partait sur le commit, jamais dans la PR.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# (2) permissions: write-all -> moindre privilège : lecture seule par défaut.
+permissions:
+  contents: read
+
+jobs:
+  # (7) le job s'appelait « entrainement » alors que « report » attend « train ».
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      # (3) checkout@v3 et setup-python@v4 : runtimes Node retirés des runners.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # (4) 3.10 sans guillemets est lu comme le nombre 3.1.
+          python-version: "3.12"
+      - run: |
+          pip install -r requirements.txt
+          pip install --no-deps -e .
+          python -m churn.train --config config/train.yaml
+
+  matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # amélioration : une valeur en échec n'annule pas les autres
+      matrix:
+        C: ["0.01", "0.1", "1.0"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # (5) la clé de la matrice est C, pas reg.
+      - run: |
+          pip install -r requirements.txt
+          pip install --no-deps -e .
+          python -m churn.train --set "model.C=${{ matrix.C }}" --artifacts-dir "matrix/C-${{ matrix.C }}"
+      # (6) un nom d'artefact par job : trois jobs ne peuvent pas écrire « metrics ».
+      - uses: actions/upload-artifact@v7
+        with:
+          name: matrix-C-${{ matrix.C }}
+          path: |
+            matrix/C-${{ matrix.C }}/metrics.json
+            matrix/C-${{ matrix.C }}/report.json
+
+  report:
+    needs: [train, matrix]
+    runs-on: ubuntu-latest
+    # (8, suite) écrire un commentaire de PR exige pull-requests: write.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: matrix-*
+          path: matrix
+      - uses: iterative/setup-cml@v2
+        if: github.event_name == 'pull_request'
+      # Bonus : « --current matrix » échouait (les métriques sont dans matrix/matrix-C-*/) ;
+      # ici, le run C=1.0 (valeur de config/train.yaml) sert de run courant, puis la matrice.
+      - if: github.event_name == 'pull_request'
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }} # (8) CML lit le jeton dans REPO_TOKEN
+        run: |
+          PYTHONPATH=src python -m churn.report --current matrix/matrix-C-1.0 \
+            --matrix-dir matrix --out report.md
+          cml comment update --watermark-title="Rapport churn (exercice)" report.md

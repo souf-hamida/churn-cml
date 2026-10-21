@@ -1,0 +1,55 @@
+# Exercice (TP4) : ce workflow contient 8 erreurs. Certaines sont détectées par actionlint,
+# d'autres seulement à l'exécution sur GitHub, d'autres encore à la lecture (sécurité,
+# déclencheurs). Copiez-le dans .github/workflows/ d'un dépôt d'essai, lancez actionlint :
+#   docker run --rm -v "$(pwd):/repo" --workdir /repo rhysd/actionlint:1.7.12 -no-color debogage/ci_casse.yml
+name: ci-churn-casse
+
+on: [push]
+
+permissions: write-all
+
+jobs:
+  entrainement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.10
+      - run: |
+          pip install -r requirements.txt
+          pip install --no-deps -e .
+          python -m churn.train --config config/train.yaml
+
+  matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        C: ["0.01", "0.1", "1.0"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -r requirements.txt
+          pip install --no-deps -e .
+          python -m churn.train --set "model.C=${{ matrix.reg }}" --artifacts-dir matrix/run
+      - uses: actions/upload-artifact@v7
+        with:
+          name: metrics
+          path: matrix/run/metrics.json
+
+  report:
+    needs: [train, matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: metrics*
+          path: matrix
+      - uses: iterative/setup-cml@v2
+      - run: |
+          PYTHONPATH=src python -m churn.report --current matrix --out report.md
+          cml comment create report.md

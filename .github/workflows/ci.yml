@@ -1,0 +1,168 @@
+# CI/CD du fil rouge churn (TP4) : lint + tests, entraînement de la branche et de main
+# (baseline), matrice d'hyperparamètres, rapport publié dans la PR par CML.
+name: ci-churn
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Moindre privilège : lecture seule par défaut ; seul le job « report » écrit dans la PR.
+permissions:
+  contents: read
+
+# Un nouveau push sur la même PR annule le run précédent devenu inutile.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  PYTHONHASHSEED: "0"
+
+jobs:
+  quality:
+    name: Lint et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Installer les dépendances
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install --no-deps -e .
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Tests (pytest, hors tests de performance du modèle)
+        # La performance est jugée plus loin par la porte de qualité, APRÈS la publication du rapport :
+        # une PR qui dégrade le modèle doit recevoir son rapport, pas seulement une coche rouge.
+        run: pytest -q -m "not performance"
+
+  train:
+    name: Entraînement (branche + baseline main)
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # historique complet : la branche main est nécessaire pour la baseline
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Installer les dépendances
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install --no-deps -e .
+      - name: Entraîner le modèle de la branche
+        run: python -m churn.train --config config/train.yaml
+      - name: Ré-entraîner la baseline (branche cible de la PR)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true # premier run : main peut ne pas encore être entraînable
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git worktree add ../baseline "origin/${BASE_REF}"
+          cd ../baseline
+          PYTHONPATH=src python -m churn.train --config config/train.yaml \
+            --artifacts-dir "${GITHUB_WORKSPACE}/baseline-run"
+      - name: Conserver les artefacts de la branche
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-pr
+          path: artifacts/
+          retention-days: 14
+      - name: Conserver les artefacts de la baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-baseline
+          path: baseline-run/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Porte de qualité (seuils F1 et ROC AUC)
+        # Dernière étape : les artefacts sont déjà conservés, le rapport sera publié même en cas d'échec.
+        run: python -m churn.evaluate --config config/train.yaml --check-gate
+
+  matrix:
+    name: Matrice C=${{ matrix.C }}
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        C: ["0.01", "0.1", "1.0"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Installer les dépendances
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install --no-deps -e .
+      - name: Entraîner avec C=${{ matrix.C }}
+        run: |
+          python -m churn.train --config config/train.yaml \
+            --set "model.C=${{ matrix.C }}" --artifacts-dir "matrix/C-${{ matrix.C }}"
+      - name: Conserver les métriques (nom d'artefact UNIQUE par job)
+        uses: actions/upload-artifact@v7
+        with:
+          name: matrix-C-${{ matrix.C }}
+          path: |
+            matrix/C-${{ matrix.C }}/metrics.json
+            matrix/C-${{ matrix.C }}/report.json
+          retention-days: 14
+
+  report:
+    name: Rapport (CML)
+    needs: [train, matrix]
+    # Publier aussi quand la porte de qualité a échoué (train en échec), sauf annulation
+    # ou si train n'a pas tourné (quality en échec : aucun artefact à publier).
+    if: ${{ !cancelled() && needs.train.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write # nécessaire pour commenter la PR
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Récupérer les runs (branche et baseline)
+        uses: actions/download-artifact@v8
+        with:
+          pattern: run-*
+          path: runs
+      - name: Récupérer la matrice
+        uses: actions/download-artifact@v8
+        with:
+          pattern: matrix-*
+          path: matrix
+      - name: Générer report.md
+        run: |
+          PYTHONPATH=src python -m churn.report --current runs/run-pr \
+            --baseline runs/run-baseline --matrix-dir matrix \
+            --image runs/run-pr/confusion_matrix.png --out report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: iterative/setup-cml@v2
+        if: github.event_name == 'pull_request'
+      - name: Publier le rapport dans la PR (un seul commentaire, mis à jour)
+        if: github.event_name == 'pull_request'
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cml comment update --watermark-title="Rapport churn" report.md
