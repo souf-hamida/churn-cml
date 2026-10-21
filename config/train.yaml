@@ -9,7 +9,7 @@ data:
   max_age: 80                  # nettoyage : clients de plus de 80 ans écartés (12 lignes)
 
 split:
-  test_size: 0.25
+  test_size: 0.2
   random_state: 42             # graine unique : split, modèle, SMOTE
   stratify: true
 
